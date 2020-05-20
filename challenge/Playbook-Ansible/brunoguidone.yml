@@ -1,0 +1,329 @@
+---
+## Autor: Bruno Guidone da Silva
+## Case para a vaga DevOps
+## Banco Neon
+
+- hosts: localhost
+  connection: local
+  gather_facts: False
+  
+  ## Declaração de variáveis
+  vars:
+    aws_access_key: "ALTERAR AQUI"
+    aws_secret_key: "ALTERAR AQUI"
+    
+    AMI_Name: "ami_lab_web_test_new_employer"
+    AMI_ID: "ami-0cda50904327414a9"
+    KeyPairName: "lab_cloud_key_ohio"
+        
+    state: 'present'
+    zone: 'us-east-2a'
+    zoneb: 'us-east-2b'
+    region: 'us-east-2'
+    
+    prefixo_padrao: "LabGuidone"
+        
+    ### Definições de Segurança
+    
+    nacl_name: "{{ prefixo_padrao }} ACL"
+    all_cidr: '0.0.0.0/0'
+    
+    ### Definições de rede em geral
+    #### Definições de VPC
+    nome_da_vpc: "{{ prefixo_padrao }} VPC"
+    vpcCidr: '10.10.0.0/16'
+    
+    internet_gateway: "{{ prefixo_padrao }} IGW"
+    route_table_name: "{{ prefixo_padrao }} route table"
+    
+    ####Subnets
+    frontendSubnet_ip: '10.10.1.0/24'
+    frontendSubnet_b_ip: '10.10.11.0/24'
+    backendSubnet_ip: '10.10.2.0/24'
+    bastionSubnet_ip: '10.10.3.0/24'
+    
+  tasks:
+    ## Criando a VPC
+    - name: Criar a VPC
+      ec2_vpc_net:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        name: "{{ nome_da_vpc }}" 
+        cidr_block: "{{ vpcCidr }}"
+        region: "{{ region }}"
+        dns_support: yes
+        dns_hostnames: yes
+        tenancy: default
+        state: "{{ state }}"
+      register: vpc_result
+    
+    ## Criando Subnet Publica (FrontEnd) - Regiao A
+    - name: Criar Subnet Publica - FrontEnd AZ A
+      ec2_vpc_subnet:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"      
+        state: "{{ state }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        cidr: "{{ frontendSubnet_ip }}"
+        az: "{{ zone }}"
+        region: "{{ region }}"
+        map_public: true
+        tags:
+          Name: FrontEnd Subnet
+      register: result_frontend_subnet
+      
+    ## Criando Subnet Publica (FrontEnd) - Regiao B
+    - name: Criar Subnet Publica - FrontEnd AZ B
+      ec2_vpc_subnet:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"      
+        state: "{{ state }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        cidr: "{{ frontendSubnet_b_ip }}"
+        az: "{{ zoneb }}"
+        region: "{{ region }}"
+        map_public: true
+        tags:
+          Name: FrontEnd Subnet B
+      register: result_frontend_b_subnet
+    
+    ## Criando Subnet Privada (Backend)
+    - name: Criar Subnet Privada - Backend
+      ec2_vpc_subnet:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"      
+        state: "{{ state }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        cidr: "{{ backendSubnet_ip }}"
+        az: "{{ zone }}"
+        region: "{{ region }}"
+        map_public: false
+        tags:
+          Name: Backend Subnet
+      register: result_backend_subnet    
+    
+    ## Criando Subnet Privada (Bastion)
+    - name: Criar Subnet Privada - Bastion
+      ec2_vpc_subnet:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        state: "{{ state }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        cidr: "{{ bastionSubnet_ip }}"
+        az: "{{ zone }}"
+        region: "{{ region }}"
+        map_public: true
+        tags:
+          Name: Bastion Subnet
+      register: result_bastion_subnet  
+    
+    ## Criando o Internet Gateway
+    - name: Criar o Internet Gateway para subnets publicas
+      ec2_vpc_igw:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ region }}"
+        state: "{{ state }}" 
+        tags:
+          Name: "{{ internet_gateway }}"
+      register: ec2_vpc_igw_result
+      
+    ## Criando o NAT Gateway
+    - name: Criar o NAT Gateway
+      ec2_vpc_nat_gateway:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        state: "{{ state }}" 
+        region: "{{ region }}"        
+        subnet_id: "{{ result_frontend_subnet.subnet.id }}"
+        wait: yes
+        if_exist_do_not_create: true
+        release_eip: true
+      register: result_nat_gateway
+  
+    ## Criando Route Table Publica
+    - name: Criando route table publica
+      ec2_vpc_route_table:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ region }}"
+        state: "{{ state }}"         
+        routes:
+          - dest: "0.0.0.0/0"
+            gateway_id: "{{ ec2_vpc_igw_result.gateway_id }}"
+        tags:
+          Name: "Route Table Publica"
+        subnets:
+          - "{{ result_frontend_subnet.subnet.id }}"
+          - "{{ result_frontend_b_subnet.subnet.id }}"
+          - "{{ result_bastion_subnet.subnet.id }}"           
+      register: result_public_route
+      
+    ## Criando route table Privada
+    - name: Criando route table Privada
+      ec2_vpc_route_table:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"  
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        state: "{{ state }}"         
+        region: "{{ region }}"
+        routes:
+          - dest: "0.0.0.0/0"
+            gateway_id: "{{ result_nat_gateway.nat_gateway_id }}"
+        tags:
+          Name: "Route Table Privada" 
+        subnets:
+          - "{{ result_backend_subnet.subnet.id }}"                   
+      register: result_private_route
+
+    ## Criando security group Default
+    - name: Criando o security Group padrão, sem acessos
+      ec2_group:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ region }}"
+        state: "{{ state }}"
+        name: "SG_SEM_ACESSO"
+        description: "Default security group"
+        tags:
+          Name: "SG_SEM_ACESSO"
+      register: sg_semacesso_results
+
+    ## Criando security group rede local
+    - name: Criando o security Group rede local FrontEnd
+      ec2_group:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ region }}"
+        state: "{{ state }}"
+        name: "SG_REDE_LOCAL_FRONTEND"
+        description: "Rede local frontend"
+        tags:
+          Name: "SG_REDE_LOCAL_FRONTEND"
+        rules:
+        - proto: tcp
+          from_port: 0
+          to_port: 65535
+          cidr_ip: "{{ frontendSubnet_ip }}"
+        - proto: tcp
+          from_port: 0
+          to_port: 65535
+          cidr_ip: "{{ frontendSubnet_b_ip }}"
+          rule_desc: "Trafego rede local"
+      register: sg_redelocal_frontend_results
+    
+    ## Criando security group Publico
+    - name: Criando o security Group para acesso publico pelo load balancer
+      ec2_group:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ region }}"
+        state: "{{ state }}"
+        name: "SG_LOAD_BALANCER"
+        description: "Acesso Publico Portas 80 e 443"
+        tags:
+          Name: "SG_LOAD_BALANCER"
+        rules:
+        - proto: tcp
+          ports:
+          - 80
+          cidr_ip: "{{ all_cidr }}"
+          rule_desc: "Trafego porta 80"
+        - proto: tcp
+          ports:
+          - 443
+          cidr_ip: "{{ all_cidr }}"
+          rule_desc: "Trafego porta 443"
+      register: sg_publico_results
+         
+    ## Criação de NACL padrão para as Subnets
+    - name: Criando NACL padrão para as subnets
+      ec2_vpc_nacl:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        region: "{{ region }}"
+        state: "{{ state }}"
+        name: "{{ nacl_name }}"
+        subnets: [ "{{ result_frontend_subnet.subnet.id }}", "{{ result_frontend_b_subnet.subnet.id }}", "{{ result_backend_subnet.subnet.id }}", "{{ result_bastion_subnet.subnet.id }}" ]
+        tags:
+          Name: "{{ nacl_name }}"
+          Description: "{{ nacl_name }}"
+        egress:
+          - [100, 'all', 'allow', "{{ all_cidr }}", null, null, null, null]
+      register: nacl_results
+    
+    ## Criando Target Group e Load Balancer
+    - name: Criando Target Group
+      elb_target_group:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"      
+        name: "TG-APP-01"
+        protocol: http
+        port: 80
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        health_check_path: /
+        successful_response_codes: "200"
+        region: "{{ region }}"
+        state: "{{ state }}"
+      register: tg_results
+
+    - name: Criando Load Balancer
+      elb_application_lb:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"        
+        name: "LB-APP-01"
+        security_groups:
+          - "{{ sg_publico_results.group_id }}"
+        subnets:
+          - "{{ result_frontend_subnet.subnet.id }}"
+          - "{{ result_frontend_b_subnet.subnet.id }}"
+        listeners:
+          - Protocol: HTTP
+            Port: 80
+            DefaultActions:
+              - Type: forward
+                TargetGroupName: "{{ tg_results.target_group_name }}"
+        region: "{{ region }}"
+        state: "{{ state }}"
+        wait: yes
+      register: lb_result
+    
+    
+    ## Criando Launch Template e Auto Scalling Group
+    - name: Criando launch template
+      ec2_launch_template:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"   
+        name: "launch_template_app01"
+        image_id: "{{ AMI_ID }}"
+        key_name: "{{ KeyPairName }}"
+        instance_type: t2.micro
+        instance_initiated_shutdown_behavior: "stop"
+        security_group_ids: [ "{{ sg_semacesso_results.group_id }}", "{{ sg_redelocal_frontend_results.group_id }}" ]
+        region: "{{ region }}"
+        state: "{{ state }}"
+      register: launch_template_result
+      
+    - name: Criando Auto Scaling Group
+      ec2_asg:
+        aws_access_key: "{{ aws_access_key }}"
+        aws_secret_key: "{{ aws_secret_key }}"      
+        name: ASG_APP_01
+        region: "{{ region }}"
+        state: "{{ state }}"
+        target_group_arns: "{{ tg_results.target_group_arn }}"
+        availability_zones: "{{ zone }}"
+        launch_template:
+            version: '1'
+            launch_template_name: 'launch_template_app01'
+        min_size: 2
+        max_size: 10
+        desired_capacity: 2
+        vpc_zone_identifier: [ "{{ result_frontend_subnet.subnet.id }}" ]
+      register: asg_result
