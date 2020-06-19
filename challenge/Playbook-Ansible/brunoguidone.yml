@@ -12,9 +12,9 @@
     aws_access_key: "ALTERAR AQUI"
     aws_secret_key: "ALTERAR AQUI"
     
-    AMI_Name: "ami_lab_web_test_new_employer"
-    AMI_ID: "ami-0cda50904327414a9"
-    KeyPairName: "lab_cloud_key_ohio"
+    AMI_Name: ""
+    AMI_ID: ""
+    KeyPairName: ""
         
     state: 'present'
     zone: 'us-east-2a'
